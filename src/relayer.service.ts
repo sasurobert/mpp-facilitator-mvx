@@ -35,11 +35,15 @@ export class RelayerService {
     const providerUrl =
       process.env.NETWORK_PROVIDER || 'https://devnet-gateway.multiversx.com';
     this.provider = new ProxyNetworkProvider(providerUrl);
-    // Load default relayer wallet (alice.pem) from a known location if it exists
-    const pemPath = path.resolve(
-      __dirname,
-      '../../mx-agentic-commerce-tests/alice.pem',
-    );
+    const pemPathEnv = process.env.RELAYER_PEM_PATH;
+    if (!pemPathEnv) {
+      this.logger.warn(
+        'RELAYER_PEM_PATH is not set. Relayed V3 transactions will fail.',
+      );
+      return;
+    }
+
+    const pemPath = path.resolve(pemPathEnv);
     if (fs.existsSync(pemPath)) {
       try {
         const pemContent = fs.readFileSync(pemPath, 'utf8');

@@ -43,6 +43,7 @@ describe('RelayerService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    process.env.RELAYER_PEM_PATH = './alice.pem';
 
     mockSigner = {
       getAddress: jest.fn().mockReturnValue({
@@ -65,6 +66,10 @@ describe('RelayerService', () => {
     }).compile();
 
     service = module.get<RelayerService>(RelayerService);
+  });
+
+  afterEach(() => {
+    delete process.env.RELAYER_PEM_PATH;
   });
 
   it('should be defined', () => {

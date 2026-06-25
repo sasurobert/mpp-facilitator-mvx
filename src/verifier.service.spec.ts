@@ -3,6 +3,8 @@ import { StorageService, SettlementRecord } from './storage.service';
 import { PrismaService } from './prisma.service';
 import { Address } from '@multiversx/sdk-core';
 
+process.env.DATABASE_URL ||= 'file:./dev.db';
+
 // Mock the ApiNetworkProvider
 jest.mock('@multiversx/sdk-network-providers', () => ({
   ApiNetworkProvider: jest.fn().mockImplementation(() => ({
@@ -169,7 +171,10 @@ describe('VerifierService', () => {
     await storageService.save(rec);
     mockGetTransaction.mockResolvedValue({
       status: { isSuccessful: () => true },
-      sender: { toBech32: () => 'erd1wrong' },
+      sender: {
+        toBech32: () =>
+          'erd1sea63y47u569ns3x5mqjf4vnygn9whkk7p6ry4rfpqyd6rd5addqyd9lf2',
+      },
       receiver: {
         toBech32: () =>
           'erd1sea63y47u569ns3x5mqjf4vnygn9whkk7p6ry4rfpqyd6rd5addqyd9lf2',
@@ -226,7 +231,10 @@ describe('VerifierService', () => {
         toBech32: () =>
           'erd1qyu5wthld6uqvlv7h243upv9qmfh4u2daer09ry3nclpyv76y7xs36h90r',
       },
-      receiver: { toBech32: () => 'erd1wrong' },
+      receiver: {
+        toBech32: () =>
+          'erd1qyu5wthld6uqvlv7h243upv9qmfh4u2daer09ry3nclpyv76y7xs36h90r',
+      },
       value: { toString: () => '1000000000000000000' },
       data: Buffer.from(`mpp:${rec.id}`),
     });

@@ -1,6 +1,8 @@
 import { StorageService, SettlementRecord } from './storage.service';
 import { PrismaService } from './prisma.service';
 
+process.env.DATABASE_URL ||= 'file:./dev.db';
+
 describe('StorageService', () => {
   let service: StorageService;
   let prisma: PrismaService;

@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
-import { Session, Prisma } from '@prisma/client';
+import { Session } from '@prisma/client';
 import { Address } from '@multiversx/sdk-core';
 import { UserVerifier } from '@multiversx/sdk-wallet';
 import { keccak256 } from 'js-sha3';
@@ -70,7 +70,7 @@ export class SessionService {
     }
 
     // signature verification
-    const isValid = await this.verifyVoucher({
+    const isValid = this.verifyVoucher({
       employer: session.employer,
       channelId: session.channelId,
       amount: data.amount,
@@ -78,7 +78,7 @@ export class SessionService {
       signature: data.signature,
     });
 
-    if (!isValid) {
+    if (!(await isValid)) {
       throw new BadRequestException('Invalid voucher signature');
     }
 
@@ -111,7 +111,7 @@ export class SessionService {
     });
   }
 
-  private async verifyVoucher(data: {
+  private verifyVoucher(data: {
     employer: string;
     channelId: string;
     amount: string;
@@ -123,7 +123,7 @@ export class SessionService {
       this.logger.warn(
         'MPP_SESSION_CONTRACT not set, skipping signature verification',
       );
-      return true;
+      return Promise.resolve(true);
     }
 
     try {
@@ -135,10 +135,15 @@ export class SessionService {
       hasher.update(contract.getPublicKey());
       hasher.update(Buffer.from(data.channelId, 'hex'));
 
-      // Amount as 32 bytes big endian
-      const amountBuf = Buffer.alloc(32);
-      const amountHex = BigInt(data.amount).toString(16).padStart(64, '0');
-      amountBuf.write(amountHex, 'hex');
+      // Match contract logic: BigUint.to_bytes_be_buffer() (minimal big-endian bytes)
+      const amountBigInt = BigInt(data.amount);
+      const amountHex = amountBigInt.toString(16);
+      const paddedAmountHex =
+        amountHex.length % 2 === 0 ? amountHex : `0${amountHex}`;
+      const amountBuf = Buffer.from(
+        paddedAmountHex === '00' ? '00' : paddedAmountHex,
+        'hex',
+      );
       hasher.update(amountBuf);
 
       // Nonce as 8 bytes big endian
@@ -147,12 +152,18 @@ export class SessionService {
       hasher.update(nonceBuf);
 
       const message = Buffer.from(hasher.hex(), 'hex');
-      const verifier = UserVerifier.fromAddress(employer);
+      const verifier = UserVerifier.fromAddress(
+        {
+          pubkey: () => employer.getPublicKey(),
+        } as unknown as Parameters<typeof UserVerifier.fromAddress>[0],
+      );
 
-      return verifier.verify(message, Buffer.from(data.signature, 'hex'));
+      return Promise.resolve(
+        verifier.verify(message, Buffer.from(data.signature, 'hex')),
+      );
     } catch (err) {
       this.logger.error(`Voucher verification failed: ${err}`);
-      return false;
+      return Promise.resolve(false);
     }
   }
 }

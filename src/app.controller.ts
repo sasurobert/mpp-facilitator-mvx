@@ -10,6 +10,7 @@ import {
   Res,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import type {
   Request as ExpressRequest,
@@ -40,6 +41,7 @@ class RateLimiter {
 
 @Controller()
 export class AppController {
+  private readonly logger = new Logger(AppController.name);
   private readonly relayerRateLimiter = new RateLimiter(
     60_000, // 1 minute window
     parseInt(process.env.MPP_RELAY_RATE_LIMIT || '10', 10),
@@ -70,10 +72,11 @@ export class AppController {
     const opaque = req.query.opaque as string;
     const digest = req.get('Digest');
     const meta = opaque ? { data: opaque } : undefined;
+    const recipient = this.relayerService.getRelayerAddress();
 
     const composeResult = this.mppxService.instance.compose([
-      this.mppxService.mvxChargeMethod._method,
-      { amount, digest, meta },
+      this.mppxService.mvxChargeMethod,
+      { amount, digest, meta, ...(recipient ? { recipient } : {}) },
     ]);
     const result = await composeResult(fetchReq);
 
@@ -93,8 +96,14 @@ export class AppController {
 
       // Extract challenge ID for the problem detail if possible
       // Format usually: Payment id="...", ...
-      const idMatch = challengeStr.match(/id="([^"]+)"/);
-      const challengeId = idMatch ? idMatch[1] : undefined;
+      const challengeId = this.extractChallengeId(challengeStr);
+      await this.savePendingChallenge({
+        challengeId,
+        recipient,
+        amount,
+        opaque,
+        digest,
+      });
 
       // Construct Problem Details JSON (RFC 9457)
       const problemDetail = {
@@ -143,10 +152,17 @@ export class AppController {
     const opaque = req.query.opaque as string;
     const digest = req.get('Digest');
     const meta = opaque ? { data: opaque } : undefined;
+    const recipient = this.relayerService.getRelayerAddress();
 
     const composeResult = this.mppxService.instance.compose([
-      this.mppxService.mvxSessionMethod._method,
-      { amount, digest, meta },
+      this.mppxService.mvxSessionMethod,
+      {
+        amount,
+        digest,
+        meta,
+        duration: '1h',
+        ...(recipient ? { recipient } : {}),
+      },
     ]);
     const result = await composeResult(fetchReq);
 
@@ -161,8 +177,14 @@ export class AppController {
       res.setHeader('Content-Type', 'application/problem+json');
 
       const challengeStr = await challengeResponse.text();
-      const idMatch = challengeStr.match(/id="([^"]+)"/);
-      const challengeId = idMatch ? idMatch[1] : undefined;
+      const challengeId = this.extractChallengeId(challengeStr);
+      await this.savePendingChallenge({
+        challengeId,
+        recipient,
+        amount,
+        opaque,
+        digest,
+      });
 
       const problemDetail = {
         type: 'https://mpp.dev/errors/payment-required',
@@ -210,10 +232,17 @@ export class AppController {
     const opaque = req.query.opaque as string;
     const digest = req.get('Digest');
     const meta = opaque ? { data: opaque } : undefined;
+    const recipient = this.relayerService.getRelayerAddress();
 
     const composeResult = this.mppxService.instance.compose([
-      this.mppxService.mvxSubscriptionMethod._method,
-      { amount, digest, meta },
+      this.mppxService.mvxSubscriptionMethod,
+      {
+        amount,
+        digest,
+        meta,
+        interval: 'monthly',
+        ...(recipient ? { recipient } : {}),
+      },
     ]);
     const result = await composeResult(fetchReq);
 
@@ -228,8 +257,14 @@ export class AppController {
       res.setHeader('Content-Type', 'application/problem+json');
 
       const challengeStr = await challengeResponse.text();
-      const idMatch = challengeStr.match(/id="([^"]+)"/);
-      const challengeId = idMatch ? idMatch[1] : undefined;
+      const challengeId = this.extractChallengeId(challengeStr);
+      await this.savePendingChallenge({
+        challengeId,
+        recipient,
+        amount,
+        opaque,
+        digest,
+      });
 
       const problemDetail = {
         type: 'https://mpp.dev/errors/payment-required',
@@ -322,5 +357,56 @@ export class AppController {
       source: body.source || null,
     });
     return { success: true, challengeId: body.id };
+  }
+
+  private extractChallengeId(challengeStr: string): string | undefined {
+    const idMatch = challengeStr.match(/id="([^"]+)"/);
+    if (idMatch) return idMatch[1];
+
+    try {
+      const parsed = JSON.parse(challengeStr) as { challengeId?: string };
+      if (parsed.challengeId) return parsed.challengeId;
+    } catch {
+      // ignore parse failures and fallback to regex extraction only
+    }
+
+    const challengeIdMatch = challengeStr.match(/"challengeId":"([^"]+)"/);
+    return challengeIdMatch ? challengeIdMatch[1] : undefined;
+  }
+
+  private async savePendingChallenge(data: {
+    challengeId?: string;
+    recipient?: string;
+    amount: string;
+    opaque?: string;
+    digest?: string;
+  }): Promise<void> {
+    if (!data.challengeId || !data.recipient) {
+      return;
+    }
+
+    try {
+      await this.storageService.save({
+        id: data.challengeId,
+        txHash: '',
+        payer: '',
+        receiver: data.recipient,
+        amount: data.amount,
+        currency: process.env.MPP_DEFAULT_CURRENCY || 'EGLD',
+        chainId: process.env.MPP_CHAIN_ID || 'D',
+        status: 'pending',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        opaque: data.opaque ? JSON.stringify({ data: data.opaque }) : null,
+        digest: data.digest || null,
+        source: null,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to persist challenge ${data.challengeId}: ${message}`,
+      );
+    }
   }
 }

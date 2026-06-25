@@ -14,10 +14,55 @@ interface ITransaction {
     isFailed(): boolean;
     isInvalid(): boolean;
   };
-  sender: IAddress;
-  receiver: IAddress;
+  sender: IAddress | string;
+  receiver: IAddress | string;
   value: string | { toString(): string };
   data?: Buffer | string;
+}
+
+function toBech32Address(value: IAddress | string): string {
+  const normalizeBech32 = (candidate: string): string => {
+    if (!/^erd1[0-9a-z]+$/.test(candidate)) {
+      throw new Error(`Invalid bech32 address: ${candidate}`);
+    }
+    return candidate;
+  };
+
+  if (typeof value === 'string') {
+    return normalizeBech32(value);
+  }
+
+  const normalized = value as unknown as {
+    toBech32?: unknown;
+    bech32?: unknown;
+    toString?: () => string;
+  };
+
+  const resolvers: Array<() => string | undefined> = [
+    () =>
+      typeof normalized.toBech32 === 'function'
+        ? (normalized.toBech32 as () => string)()
+        : undefined,
+    () =>
+      typeof normalized.bech32 === 'function'
+        ? (normalized.bech32 as () => string)()
+        : undefined,
+    () =>
+      typeof normalized.bech32 === 'string' ? normalized.bech32 : undefined,
+    () => {
+      const str = normalized.toString?.();
+      return str?.startsWith('erd1') ? str : undefined;
+    },
+  ];
+
+  for (const resolve of resolvers) {
+    const address = resolve();
+    if (address) {
+      return normalizeBech32(address);
+    }
+  }
+
+  throw new Error('Unable to normalize address to bech32 string');
 }
 
 /**
@@ -232,7 +277,7 @@ export class VerifierService {
       }
 
       // 6. Sender Verification
-      if (tx.sender.toBech32() !== expectedSender) {
+      if (toBech32Address(tx.sender) !== expectedSender) {
         return {
           success: false,
           error: 'Transaction sender does not match expected sender',
@@ -266,11 +311,11 @@ export class VerifierService {
           }
           if (
             existing.receiver &&
-            tx.receiver.toBech32() !== existing.receiver
+            toBech32Address(tx.receiver) !== existing.receiver
           ) {
             return {
               success: false,
-              error: `Receiver mismatch: expected ${existing.receiver}, got ${tx.receiver.toBech32()}`,
+              error: `Receiver mismatch: expected ${existing.receiver}, got ${toBech32Address(tx.receiver)}`,
             };
           }
         } else if (multiEsdtData) {
@@ -310,7 +355,10 @@ export class VerifierService {
           };
         }
 
-        if (existing.receiver && tx.receiver.toBech32() !== existing.receiver) {
+        if (
+          existing.receiver &&
+          toBech32Address(tx.receiver) !== existing.receiver
+        ) {
           return {
             success: false,
             error: 'Receiver does not match expected address',
