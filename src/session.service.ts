@@ -8,7 +8,7 @@ import { PrismaService } from './prisma.service';
 import { Session } from '@prisma/client';
 import { Address } from '@multiversx/sdk-core';
 import { UserVerifier } from '@multiversx/sdk-wallet';
-import { keccak256 } from 'js-sha3';
+import { keccak_256 } from '@noble/hashes/sha3';
 
 @Injectable()
 export class SessionService {
@@ -130,37 +130,29 @@ export class SessionService {
       const employer = Address.newFromBech32(data.employer);
       const contract = Address.newFromBech32(contractAddr);
 
-      const hasher = keccak256.create();
-      hasher.update(Buffer.from('mpp-session-v1'));
-      hasher.update(contract.getPublicKey());
-      hasher.update(Buffer.from(data.channelId, 'hex'));
-
-      // Match contract logic: BigUint.to_bytes_be_buffer() (minimal big-endian bytes)
-      const amountBigInt = BigInt(data.amount);
-      const amountHex = amountBigInt.toString(16);
-      const paddedAmountHex =
-        amountHex.length % 2 === 0 ? amountHex : `0${amountHex}`;
-      const amountBuf = Buffer.from(
-        paddedAmountHex === '00' ? '00' : paddedAmountHex,
-        'hex',
-      );
-      hasher.update(amountBuf);
+      // Amount as 32 bytes big endian (canonical)
+      const amountBuf = Buffer.alloc(32);
+      const amountHex = BigInt(data.amount).toString(16).padStart(64, '0');
+      amountBuf.write(amountHex, 'hex');
 
       // Nonce as 8 bytes big endian
       const nonceBuf = Buffer.alloc(8);
       nonceBuf.writeBigUInt64BE(BigInt(data.nonce));
-      hasher.update(nonceBuf);
 
-      const message = Buffer.from(hasher.hex(), 'hex');
-      const verifier = UserVerifier.fromAddress(
-        {
-          pubkey: () => employer.getPublicKey(),
-        } as unknown as Parameters<typeof UserVerifier.fromAddress>[0],
-      );
+      const messageToHash = Buffer.concat([
+        Buffer.from('mpp-session-v1'),
+        Buffer.from(contract.getPublicKey()),
+        Buffer.from(data.channelId, 'hex'),
+        amountBuf,
+        nonceBuf,
+      ]);
 
-      return Promise.resolve(
-        verifier.verify(message, Buffer.from(data.signature, 'hex')),
-      );
+      const hash = keccak_256(messageToHash);
+      const verifier = UserVerifier.fromAddress({
+        pubkey: () => Buffer.from(employer.getPublicKey()),
+      });
+
+      return verifier.verify(hash, Buffer.from(data.signature, 'hex'));
     } catch (err) {
       this.logger.error(`Voucher verification failed: ${err}`);
       return Promise.resolve(false);

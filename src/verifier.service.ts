@@ -288,12 +288,13 @@ export class VerifierService {
       const dataStr = tx.data ? tx.data.toString() : '';
       const isEsdt = expectedCurrency !== 'EGLD';
 
+      let esdtData: ReturnType<typeof parseEsdtTransfer> = null;
+      let multiEsdtData: ReturnType<typeof parseMultiEsdtTransfer> = null;
+
       if (isEsdt) {
         // Parse ESDT transfer or MultiESDT transfer from data field
-        const esdtData = parseEsdtTransfer(dataStr);
-        const multiEsdtData = !esdtData
-          ? parseMultiEsdtTransfer(dataStr)
-          : null;
+        esdtData = parseEsdtTransfer(dataStr);
+        multiEsdtData = !esdtData ? parseMultiEsdtTransfer(dataStr) : null;
 
         if (esdtData) {
           // Single ESDT Transfer
@@ -367,18 +368,73 @@ export class VerifierService {
       }
 
       // 8. Data Payload Tagging Verification (MPP Core)
-      const expectedDataVariants = [
-        challengeId,
-        `mpp:${challengeId}`,
-        Buffer.from(challengeId).toString('hex'),
-        Buffer.from(`mpp:${challengeId}`).toString('hex'),
-      ];
+      const expectedTags = [challengeId, `mpp:${challengeId}`];
+      const expectedHexes = expectedTags.map((t) =>
+        Buffer.from(t).toString('hex').toLowerCase(),
+      );
 
       let dataMatches = false;
-      for (const variant of expectedDataVariants) {
-        if (dataStr.includes(variant)) {
+      if (esdtData) {
+        if (esdtData.mppTag && expectedTags.includes(esdtData.mppTag)) {
           dataMatches = true;
-          break;
+        } else {
+          const parts = dataStr.split('@');
+          for (let i = 3; i < parts.length; i++) {
+            const partLower = parts[i].toLowerCase();
+            if (expectedHexes.includes(partLower)) {
+              dataMatches = true;
+              break;
+            }
+            try {
+              const decoded = Buffer.from(parts[i], 'hex').toString('utf-8');
+              if (expectedTags.includes(decoded)) {
+                dataMatches = true;
+                break;
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } else if (multiEsdtData) {
+        if (multiEsdtData.mppTag && expectedTags.includes(multiEsdtData.mppTag)) {
+          dataMatches = true;
+        } else {
+          const parts = dataStr.split('@');
+          for (let i = 1; i < parts.length; i++) {
+            const partLower = parts[i].toLowerCase();
+            if (expectedHexes.includes(partLower)) {
+              dataMatches = true;
+              break;
+            }
+            try {
+              const decoded = Buffer.from(parts[i], 'hex').toString('utf-8');
+              if (expectedTags.includes(decoded)) {
+                dataMatches = true;
+                break;
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      } else {
+        // Native EGLD: check exact payload or decoded hex
+        const trimmed = dataStr.trim();
+        if (
+          expectedTags.includes(trimmed) ||
+          expectedHexes.includes(trimmed.toLowerCase())
+        ) {
+          dataMatches = true;
+        } else {
+          try {
+            const decoded = Buffer.from(trimmed, 'hex').toString('utf-8');
+            if (expectedTags.includes(decoded)) {
+              dataMatches = true;
+            }
+          } catch {
+            /* ignore */
+          }
         }
       }
 
