@@ -111,7 +111,7 @@ export class SessionService {
     });
   }
 
-  private verifyVoucher(data: {
+  private async verifyVoucher(data: {
     employer: string;
     channelId: string;
     amount: string;
@@ -123,7 +123,7 @@ export class SessionService {
       this.logger.warn(
         'MPP_SESSION_CONTRACT not set, skipping signature verification',
       );
-      return Promise.resolve(true);
+      return true;
     }
 
     try {
@@ -155,7 +155,7 @@ export class SessionService {
       return verifier.verify(hash, Buffer.from(data.signature, 'hex'));
     } catch (err) {
       this.logger.error(`Voucher verification failed: ${err}`);
-      return Promise.resolve(false);
+      return false;
     }
   }
 }
